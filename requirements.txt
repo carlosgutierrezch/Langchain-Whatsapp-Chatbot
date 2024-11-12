@@ -1,4 +1,5 @@
-openai
+flask
 python-dotenv
-Flask
-ipykernel
+openai
+aiohttp
+requests
