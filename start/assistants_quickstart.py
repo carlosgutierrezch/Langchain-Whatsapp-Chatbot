@@ -3,54 +3,60 @@ import shelve
 from dotenv import load_dotenv
 import os
 import time
+from pathlib import Path
+from typing import List
 
 load_dotenv()
 OPEN_AI_API_KEY = os.getenv("OPEN_AI_API_KEY")
 client = OpenAI(api_key=OPEN_AI_API_KEY)
 
 
-# --------------------------------------------------------------
-# Upload file
-# --------------------------------------------------------------
-def upload_file(path):
-    # Upload a file with an "assistants" purpose
-    file = client.files.create(file=open(path, "rb"), purpose="assistants")
-    return file
 
-
-file = upload_file("../data/airbnb-faq.pdf")
-
-
-# --------------------------------------------------------------
-# Create assistant
-# --------------------------------------------------------------
-def create_assistant(file):
-    """
-    You currently cannot set the temperature for Assistant via the API.
-    """
+def create_assistant():
+    client = OpenAI()
     assistant = client.beta.assistants.create(
-        name="WhatsApp AirBnb Assistant",
-        instructions="You're a helpful WhatsApp assistant that can assist guests that are staying in our Paris AirBnb. Use your knowledge base to best respond to customer queries. If you don't know the answer, say simply that you cannot help with question and advice to contact the host directly. Be friendly and funny.",
-        tools=[{"type": "retrieval"}],
-        model="gpt-4-1106-preview",
-        file_ids=[file.id],
-    )
+    name="Airbnb Assistant",
+    instructions="You're a helpful WhatsApp assistant that can assist guests that are staying in our Paris AirBnb. Use your knowledge base to best respond to customer queries. If you don't know the answer, say simply that you cannot help with question and advice to contact the host directly. Be friendly and funny",
+    model="gpt-3.5-turbo",
+    tools=[{"type": "file_search"}])
+    
     return assistant
 
+assistant = create_assistant()
+print(assistant.id)
 
-assistant = create_assistant(file)
+file_paths = ["../data/airbnb-faq.pdf"]
+
+def vectorize_data(file_paths:List[Path]):
+
+    vector_store = client.beta.vector_stores.create(name="Knowledge_base")
+    file_streams = [open(path, "rb") for path in file_paths]
+    file_batch = client.beta.vector_stores.file_batches.upload_and_poll(vector_store_id=vector_store.id, files=file_streams)
+    return vector_store,file_batch
+
+vector_store,file_batch=vectorize_data(file_paths)
+
+ 
+def update_assistant(assistant):
+
+    assistant = client.beta.assistants.update(assistant_id=assistant.id,tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}})
+    
+    return assistant
+
+assistant=update_assistant(assistant)
 
 
 # --------------------------------------------------------------
 # Thread management
 # --------------------------------------------------------------
+
 def check_if_thread_exists(wa_id):
-    with shelve.open("threads_db") as threads_shelf:
+    with shelve.open("threads_db.db") as threads_shelf:
         return threads_shelf.get(wa_id, None)
 
 
 def store_thread(wa_id, thread_id):
-    with shelve.open("threads_db", writeback=True) as threads_shelf:
+    with shelve.open("threads_db.db", writeback=True) as threads_shelf:
         threads_shelf[wa_id] = thread_id
 
 
@@ -91,7 +97,7 @@ def generate_response(message_body, wa_id, name):
 # --------------------------------------------------------------
 def run_assistant(thread):
     # Retrieve the Assistant
-    assistant = client.beta.assistants.retrieve("asst_7Wx2nQwoPWSf710jrdWTDlfE")
+    assistant = client.beta.assistants.retrieve(assistant.id)
 
     # Run the assistant
     run = client.beta.threads.runs.create(
