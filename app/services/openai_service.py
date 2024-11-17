@@ -4,14 +4,7 @@ from dotenv import load_dotenv
 import os
 import time
 import logging
-# from langchain_community.utilities import SQLDatabase
-# from langchain_core.output_parsers import StrOutputParser
-# from langchain_core.prompts import ChatPromptTemplate
-# from pydantic import BaseModel
-# from langchain_core.runnables import RunnablePassthrough
 from pathlib import Path
-# from langchain_openai import ChatOpenAI
-# from langchain_community.agent_toolkits import create_sql_agent
 from app.services.WorkflowManager import Workflow
 from app.services.State import InputState, OutputState
 
@@ -19,17 +12,11 @@ from app.services.State import InputState, OutputState
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
-# client = OpenAI(api_key=OPENAI_API_KEY)
-# db = SQLDatabase.from_uri("sqlite:///all_data.db")
 
-
-
-# llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 agent_executor = Workflow()
 
 
 
-# Use context manager to ensure the shelf file is closed properly
 def check_if_thread_exists(wa_id):
     with shelve.open("threads_db") as threads_shelf:
         return threads_shelf.get(wa_id, None)

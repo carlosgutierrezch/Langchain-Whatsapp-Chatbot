@@ -2,119 +2,117 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from app.services.DatabaseManager import DatabaseManager
 from app.services.LLMManager import LLMManager
-import re
+
+
 
 class SQLAgent:
     def __init__(self):
         self.db_manager = DatabaseManager()
         self.llm_manager = LLMManager()
-        
-        # Define common greetings in multiple languages
-        self.greeting_patterns = {
-            'english': r'\b(hi|hello|hey|good morning|good afternoon|good evening|greetings)\b',
-            'spanish': r'\b(hola|buenos días|buenas tardes|buenas noches)\b',
-        }
-    def is_greeting(self, text: str) -> bool:
-        """Check if the input is a casual greeting."""
-        text = text.lower().strip()
-        for patterns in self.greeting_patterns.values():
-            if re.search(patterns, text, re.IGNORECASE):
-                return True
-        return False
-    
-    def get_casual_response(self, text: str) -> dict:
-     """Generate a casual, friendly response for greetings."""
-     prompt = ChatPromptTemplate.from_messages([
-         ("system", '''You are a friendly, laid-back AI assistant who enjoys casual conversations. When users greet you, respond with a warm, informal tone in their language (Spanish or English). Keep it light and relaxed, and mention that you're happy to help with restaurant suggestions, but only if needed. 
-         If the user greets in Spanish, respond in Spanish. If in English, respond in English.'''),
-         ("human", "{text}")
-     ])
-     
-     response = self.llm_manager.invoke(prompt, text=text)
-     
-     return {
-         "answer": response,
-         "recommendation": "No recommendation",
-         "recommendation_reason": "Casual conversation",
-         "formatted_data_for_recommendation": {}
-     }
 
     def parse_question(self, state: dict) -> dict:
         """Parse user question and identify relevant tables and columns."""
         question = state['question']
-        
-        # Check if it's a casual greeting first
-        if self.is_greeting(question):
-            return {
-                "parsed_question": {
-                    "is_relevant": False,
-                    "message": "GREETING",
-                    "relevant_tables": []
-                }
-            }
-
-        # Obtain the database schema
         schema = self.db_manager.get_schema()
 
-        # Construct the prompt to identify if the question is related to the restaurants database
         prompt = ChatPromptTemplate.from_messages([
-            ("system", '''You are an AI assistant for a restaurant recommendation service in Madrid. 
-            Based on the user's question, check if it's related to restaurants or a general inquiry. 
-            Use the provided database schema to identify relevant tables and columns for the query. 
-            Only proceed with querying the database if the question is relevant to restaurant recommendations. Otherwise, respond casually.'''),
-            ("human", f"===User question:\n{question}\n\n===Database schema:\n{schema}\n\nIs this question relevant to the restaurant database? If yes, identify the relevant tables and columns.")
+            ("system", '''You are a data analyst that can help summarize SQL tables and parse user questions about a database. 
+            Given the question and database schema, identify the relevant tables and columns. 
+            If the question is not relevant to the database or if there is not enough information to answer the question, set is_relevant to false.
+
+            Your response should be in the following JSON format:
+            {{
+                "is_relevant": boolean,
+                "relevant_tables": [
+                    {{
+                        "table_name": string,
+                        "columns": [string],
+                        "noun_columns": [string]
+                    }}
+                ]
+            }}
+
+            The "noun_columns" field should contain only the columns that are relevant to the question and contain nouns or names, for example, the column "Artist name" contains nouns relevant to the question "What are the top selling artists?", but the column "Artist ID" is not relevant because it does not contain a noun. Do not include columns that contain numbers.
+            '''),
+            ("human", "===Database schema:\n{schema}\n\n===User question:\n{question}\n\nIdentify relevant tables and columns:")
         ])
 
-        # Invoke the model
-        response = self.llm_manager.invoke(prompt, question=question, schema=schema)
+        output_parser = JsonOutputParser()
         
-        # Parse the model's response (this should now give us a structured answer)
-        output_parser = JsonOutputParser()  # You can adjust the parser based on the output format
+        response = self.llm_manager.invoke(prompt, schema=schema, question=question)
         parsed_response = output_parser.parse(response)
-
-        # If the question is not relevant, we indicate that and provide a casual response
-        if not parsed_response.get("is_relevant", True):
-            parsed_response["is_relevant"] = False
-            parsed_response["message"] = "This seems like a general question. Feel free to ask about restaurants in Madrid!"
-        
         return {"parsed_question": parsed_response}
 
+    def get_unique_nouns(self, state: dict) -> dict:
+        """Find unique nouns in relevant tables and columns."""
+        parsed_question = state['parsed_question']
+        
+        if not parsed_question['is_relevant']:
+            return {"unique_nouns": []}
+
+        unique_nouns = set()
+        for table_info in parsed_question['relevant_tables']:
+            table_name = table_info['table_name']
+            noun_columns = table_info['noun_columns']
+            
+            if noun_columns:
+                column_names = ', '.join(f"`{col}`" for col in noun_columns)
+                query = f"SELECT DISTINCT {column_names} FROM `{table_name}`"
+                results = self.db_manager.execute_query(state['uuid'], query)
+                for row in results:
+                    unique_nouns.update(str(value) for value in row if value)
+
+        return {"unique_nouns": list(unique_nouns)}
+
     def generate_sql(self, state: dict) -> dict:
-        """Generate SQL query based on parsed question."""
+        """Generate SQL query based on parsed question and unique nouns."""
         question = state['question']
         parsed_question = state['parsed_question']
+        unique_nouns = state['unique_nouns']
 
         if not parsed_question['is_relevant']:
             return {"sql_query": "NOT_RELEVANT", "is_relevant": False}
     
-        schema = self.db_manager.get_schema(state['uuid'])
+        schema = self.db_manager.get_schema()
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", '''
-                You are an AI assistant that generates SQL queries to answer questions about restaurants in Madrid. Based on the user’s question, use the relevant tables and columns from the database schema to construct a valid SQL query.
-                
-                If there is insufficient information to construct a SQL query, respond with "NOT_ENOUGH_INFO".
-                For responses requiring charts, such as a distribution of ratings or prices:
-                - Use the format `[[x, y]]` or `[[label, x, y]]` for results.
-                - "x" should represent the rating, price, or relevant metric; "y" should represent the count or frequency.
-                - Exclude rows where any column contains NULL, "N/A," or an empty string.
+            You are an AI assistant that generates SQL queries based on user questions, database schema, and unique nouns found in the relevant tables. Generate a valid SQL query to answer the user's question.
 
-                SKIP ALL ROWS WHERE ANY COLUMN IS NULL or "N/A" or "".
-                Provide only the query string. Ensure that table and column names are enclosed in backticks, and use exact spellings from the unique nouns list provided.
-                '''),
-                ("human", '''===Database schema:
-                {schema}
+            If there is not enough information to write a SQL query, respond with "NOT_ENOUGH_INFO".
 
-                ===User question:
-                {question}
+            Here are some examples:
 
-                ===Relevant tables and columns:
-                {parsed_question}
+            1. What is the best restaurant?
+            Answer: SELECT name, rating, url FROM data_restaurants ORDER BY rating DESC LIMIT 5
 
-                ===Unique nouns in relevant tables:
-                {unique_nouns}
+            2. What is the restaurant with the worst rating in madrid?
+            Answer: SELECT name, rating, url FROM data_restaurants ORDER BY rating ASC LIMIT 5
+            
+            3. What is the price range in the best restaurant?
+            Answer: SELECT name AS best_restaurant, 
+                    rating AS highest_rating, 
+                    price_range
+                    FROM restaurants
+                    WHERE rating = (SELECT MAX(rating) FROM restaurants);
+            
 
-                Generate SQL query string'''),
+            SKIP ALL ROWS WHERE ANY COLUMN IS NULL or "N/A" or "".
+            Just give the query string. Do not format it. Make sure to use the correct spellings of nouns as provided in the unique nouns list. All the table and column names should be enclosed in backticks.
+            '''),
+                        ("human", '''===Database schema:
+            {schema}
+
+            ===User question:
+            {question}
+
+            ===Relevant tables and columns:
+            {parsed_question}
+
+            ===Unique nouns in relevant tables:
+            {unique_nouns}
+
+            Generate SQL query string'''),
         ])
 
         response = self.llm_manager.invoke(prompt, schema=schema, question=question, parsed_question=parsed_question, unique_nouns=unique_nouns)
@@ -131,24 +129,24 @@ class SQLAgent:
         if sql_query == "NOT_RELEVANT":
             return {"sql_query": "NOT_RELEVANT", "sql_valid": False}
         
-        schema = self.db_manager.get_schema(state['uuid'])
+        schema = self.db_manager.get_schema()
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", '''
-                You are an AI assistant that validates and fixes SQL queries. Your task is to:
-                1. Check if the SQL query is valid.
-                2. Ensure all table and column names are correctly spelled and exist in the schema. All the table and column names should be enclosed in backticks.
-                3. If there are any issues, fix them and provide the corrected SQL query.
-                4. If no issues are found, return the original query.
+            You are an AI assistant that validates and fixes SQL queries. Your task is to:
+            1. Check if the SQL query is valid.
+            2. Ensure all table and column names are correctly spelled and exist in the schema. All the table and column names should be enclosed in backticks.
+            3. If there are any issues, fix them and provide the corrected SQL query.
+            4. If no issues are found, return the original query.
 
-                Respond in JSON format with the following structure. Only respond with the JSON:
-                {{
-                    "valid": boolean,
-                    "issues": string or null,
-                    "corrected_query": string
-                }}
+            Respond in JSON format with the following structure. Only respond with the JSON:
+            {{
+                "valid": boolean,
+                "issues": string or null,
+                "corrected_query": string
+            }}
             '''),
-            ("human", '''===Database schema:
+                        ("human", '''===Database schema:
             {schema}
 
             ===Generated SQL query:
@@ -160,7 +158,27 @@ class SQLAgent:
                 "issues": string or null,
                 "corrected_query": string
             }}
-            '''), 
+
+            For example:
+            1. {{
+                "valid": true,
+                "issues": null,
+                "corrected_query": "None"
+            }}
+                        
+            2. {{
+                "valid": false,
+                "issues": "Column USERS does not exist",
+                "corrected_query": "SELECT * FROM \`users\` WHERE age > 25"
+            }}
+
+            3. {{
+                "valid": false,
+                "issues": "Column names and table names should be enclosed in backticks if they contain spaces or special characters",
+                "corrected_query": "SELECT * FROM \`gross income\` WHERE \`age\` > 25"
+            }}
+                        
+            '''),
         ])
 
         output_parser = JsonOutputParser()
@@ -195,17 +213,8 @@ class SQLAgent:
         question = state['question']
         results = state['results']
 
-        # Handle greetings
-        if (state.get('parsed_question', {}).get('message') == "GREETING"):
-            return self.get_casual_response(question)
-
         if results == "NOT_RELEVANT":
-            return {
-                "answer": "I can help you find restaurants in Madrid! Feel free to ask me about restaurants, cuisines, ratings, or specific areas.",
-                "recommendation": "No recommendation",
-                "recommendation_reason": "General conversation",
-                "formatted_data_for_recommendation": {}
-            }
+            return {"answer": "Sorry, I can only give answers relevant to the database."}
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an AI assistant that formats database query results into a human-readable response. Give a conclusion to the user's question based on the query results. Do not give the answer in markdown format. Only give the answer in one line."),
@@ -215,7 +224,6 @@ class SQLAgent:
         response = self.llm_manager.invoke(prompt, question=question, results=results)
         return {"answer": response}
 
-
     def choose_recommendation(self, state: dict) -> dict:
         """Choose an appropriate recommendation from the data."""
         question = state['question']
@@ -223,71 +231,189 @@ class SQLAgent:
         sql_query = state['sql_query']
 
         if results == "NOT_RELEVANT":
-            return {
-                "recommendation": "No recommendation",
-                "recommendation_reason": "No visualization needed.",
-                "formatted_data_for_recommendation": {}  # Return empty dictionary
-            }
+            return {"recommendation": "none", "recommendation_reasoning": "No recommendation needed for irrelevant questions."}
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", '''
-            You are an AI assistant that recommends restaurants located in the city of Madrid. Based on the user's question, SQL query, and query results, suggest the most suitable restaurant from the data. If no recommendation is appropriate, indicate that.
+             You are an AI assistant that specializes in recommending restaurants. Based on the user's question, the SQL query, and the query results, provide the most accurate and suitable restaurant recommendation. If no recommendation fits, clearly state that no suitable option is available.
 
-        - If the user asks about a specific restaurant, provide the URL for that restaurant.
-            - For each of the top 5 restaurants, provide the description in plain text.
+            When making recommendations, consider these factors:
+            - Location: Prioritize restaurants near the specified area or region.
+            - Cuisine: Match the cuisine type or style the user is asking for (e.g., "Italian," "Vegan").
+            - Ratings: Favor restaurants with higher ratings or reviews if applicable.
+            - Price Range: Consider the price range based on the user's preferences or question.
+            - Special Requests: Address specific requirements like "family-friendly," "romantic atmosphere," or dietary preferences like "gluten-free."
+            
+            Provide concise and actionable recommendations. Use the query results to support your answers when appropriate. Do NOT recommend a restaurant if the available data does not support it.
 
-            Provide your response in the following format:
-
-            User question: {question}
-            Neighborhood: [Neighborhood name]
-            Top 5 Restaurants:
-            1. [Restaurant name]
-            URL: [Restaurant URL]
-            Description: [Restaurant description in plain text]
-            2. [Restaurant name] 
-            URL: [Restaurant URL]
-            Description: [Restaurant description in plain text]
-            3. [Restaurant name]
-            URL: [Restaurant URL] 
-            Description: [Restaurant description in plain text]
-            4. [Restaurant name]
-            URL: [Restaurant URL]
-            Description: [Restaurant description in plain text]
-            5. [Restaurant name]
-            URL: [Restaurant URL]
-            Description: [Restaurant description in plain text]
-
-            If no recommendation is appropriate, indicate that.
+            Output your response in the following format:
+            Recommended restaurant: [Name of the restaurant or "None" if no recommendation is suitable]
+            Reason: [Explain why this restaurant was chosen based on location, cuisine, rating, etc.]
+            Additional information: [Optional details like opening hours, special offers, or unique features]
             '''),
+            
             ("human", '''
             User question: {question}
             SQL query: {sql_query}
             Query results: {results}
 
-            Recommend a recommendation:'''),
-        ])
+            Recommend a restaurant:'''),
+                    ])
 
         response = self.llm_manager.invoke(prompt, question=question, sql_query=sql_query, results=results)
-
-        # Parse the response to extract the recommendation
-        lines = response.split('\n')
         
+        lines = response.split('\n')
         recommendation = lines[0].split(': ')[1]
         reason = lines[1].split(': ')[1]
 
-        # Format the recommendation data
-        formatted_data = {
-            "Top 5 Restaurants": [
-                {"Restaurant name": "Example Restaurant 1", "URL": "http://example.com/1", "Description": "Great food."},
-                {"Restaurant name": "Example Restaurant 2", "URL": "http://example.com/2", "Description": "Cozy ambiance."},
-                {"Restaurant name": "Example Restaurant 3", "URL": "http://example.com/3", "Description": "Affordable prices."},
-                {"Restaurant name": "Example Restaurant 4", "URL": "http://example.com/4", "Description": "Fantastic service."},
-                {"Restaurant name": "Example Restaurant 5", "URL": "http://example.com/5", "Description": "Excellent reviews."}
-            ]
-        }
+        return {"recommendation": recommendation, "recommendation_reason": reason}
 
-        return {
-            "recommendation": recommendation,
-            "recommendation_reason": reason,
-            "formatted_data_for_recommendation": formatted_data  # Correctly return the dictionary
-                }
+# class RestaurantAgent:
+#     def __init__(self):
+#         self.db_manager = DatabaseManager()
+#         self.llm_manager = LLMManager()
+    
+#     def is_greeting(self, text: str) -> bool:
+#         """Detect if the message is a greeting in either English or Spanish."""
+#         greetings = {
+#             'en': r'\b(hi|hello|hey|good morning|good afternoon|good evening|sup|what\'s up)\b',
+#             'es': r'\b(hola|buenos días|buenas tardes|buenas noches|qué tal|que tal)\b'
+#         }
+#         combined_pattern = '|'.join(greetings.values())
+#         return bool(re.search(combined_pattern, dict(text)))
+    
+#     def detect_language(self, text: str) -> str:
+#         """Detect if the message is in English or Spanish."""
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", "You are a language detector. Respond only with 'en' for English or 'es' for Spanish."),
+#             ("human", "{text}")
+#         ])
+#         return self.llm_manager.invoke(prompt, text=text).strip().lower()
+    
+#     def is_restaurant_query(self, text: str) -> bool:
+#         """Detect if the message is a restaurant-related query."""
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", """Determine if the message is asking about restaurants, food, dining, or related topics.
+#             Respond only with 'true' or 'false'."""),
+#             ("human", "{text}")
+#         ])
+#         response = self.llm_manager.invoke(prompt, text=text).strip().lower()
+#         return response == 'true'
+
+#     def process_message(self, message: str, user_id: str) -> Dict[str, Any]:
+#         """Main entry point for processing user messages."""
+#         # Detect language
+#         language = self.detect_language(message)
+        
+#         # If it's a greeting, respond casually
+#         if self.is_greeting(message):
+#             return self.get_casual_response(message, language)
+            
+#         # If it's not a restaurant query, maintain casual conversation
+#         if not self.is_restaurant_query(message):
+#             return self.get_casual_response(message, language)
+            
+#         # If it is a restaurant query, process it
+#         return self.process_restaurant_query(message, language, user_id)
+
+#     def get_casual_response(self, text: str, language: str) -> Dict[str, Any]:
+#         """Generate a casual, context-aware response."""
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", """You are a friendly WhatsApp chatbot that helps people find restaurants in Madrid. 
+#             Keep responses casual and brief (1-2 sentences max). If user writes in Spanish, respond in Spanish.
+#             If they write in English, respond in English. Maintain a warm, helpful tone."""),
+#             ("human", "{text}")
+#         ])
+        
+#         response = self.llm_manager.invoke(prompt, text=text)
+        
+#         return {
+#             "answer": response,
+#             "recommendation": None,
+#             "urls": []
+#         }
+
+#     def process_restaurant_query(self, question: str, language: str, user_id: str) -> Dict[str, Any]:
+#         """Process a restaurant-related query and generate recommendations."""
+#         # Get schema and generate query
+#         schema = self.db_manager.get_schema(user_id)
+        
+#         # Generate and execute SQL query
+#         sql_result = self.generate_and_execute_sql(question, schema, user_id)
+        
+#         if not sql_result.get("results"):
+#             return self.get_no_results_response(language)
+            
+#         # Format recommendation
+#         return self.format_recommendation(
+#             question=question,
+#             results=sql_result["results"],
+#             language=language
+#         )
+
+#     def generate_and_execute_sql(self, question: str, schema: str, user_id: str) -> Dict[str, Any]:
+#         """Generate and execute SQL query."""
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", """Generate a SQL query to find restaurants based on the user's question.
+#             Ensure proper table/column names and handle nulls."""),
+#             ("human", """Schema: {schema}
+#             Question: {question}
+#             Generate SQL:""")
+#         ])
+        
+#         sql_query = self.llm_manager.invoke(prompt, schema=schema, question=question)
+        
+#         try:
+#             results = self.db_manager.execute_query(user_id, sql_query)
+#             return {"results": results}
+#         except Exception as e:
+#             return {"error": str(e)}
+
+#     def format_recommendation(self, question: str, results: list, language: str) -> Dict[str, Any]:
+#         """Format the restaurant recommendations in the user's language."""
+#         prompt = ChatPromptTemplate.from_messages([
+#             ("system", """You are a friendly WhatsApp restaurant recommender for Madrid.
+#             Format the response in the user's language (Spanish/English).
+#             Keep it casual and brief.
+#             Include restaurant names, brief descriptions, and URLs if available.
+#             Limit to top 3 recommendations.
+#             Make it easy to read on a mobile device."""),
+#             ("human", """Question: {question}
+#             Results: {results}
+#             Language: {language}
+#             Format response:""")
+#         ])
+        
+#         response = self.llm_manager.invoke(
+#             prompt,
+#             question=question,
+#             results=results,
+#             language=language
+#         )
+        
+#         # Extract URLs from the response for WhatsApp clickable links
+#         urls = self.extract_urls(response)
+        
+#         return {
+#             "answer": response,
+#             "urls": urls,
+#             "recommendation": True
+#         }
+
+#     def get_no_results_response(self, language: str) -> Dict[str, Any]:
+#         """Generate a response when no restaurants match the criteria."""
+#         templates = {
+#             'en': "I couldn't find any restaurants matching those criteria. Could you try being more specific or changing your preferences?",
+#             'es': "No encontré restaurantes que coincidan con esos criterios. ¿Podrías ser más específico o cambiar tus preferencias?"
+#         }
+        
+#         return {
+#             "answer": templates.get(language, templates['en']),
+#             "recommendation": None,
+#             "urls": []
+#         }
+
+#     def extract_urls(self, text: str) -> list:
+#         """Extract URLs from text for WhatsApp clickable links."""
+#         url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+#         return re.findall(url_pattern, text)
