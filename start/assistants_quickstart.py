@@ -15,17 +15,16 @@ client = OpenAI(api_key=OPEN_AI_API_KEY)
 def create_assistant():
     client = OpenAI()
     assistant = client.beta.assistants.create(
-    name="Airbnb Assistant",
-    instructions="You're a helpful WhatsApp assistant that can assist guests that are staying in our Paris AirBnb. Use your knowledge base to best respond to customer queries. If you don't know the answer, say simply that you cannot help with question and advice to contact the host directly. Be friendly and funny",
+    name="Restaurant expert",
+    instructions="You're a helpful WhatsApp assistant that can assist guests that are looking for a place to eat in their neighborhood, you are supposed to give recommendations based in the reviews, rating, an total user reviews. Be friendly and funny",
     model="gpt-3.5-turbo",
     tools=[{"type": "file_search"}])
     
     return assistant
 
 assistant = create_assistant()
-print(assistant.id)
 
-file_paths = ["../data/airbnb-faq.pdf"]
+file_paths = ["../data/todos_restaurantes.csv"]
 
 def vectorize_data(file_paths:List[Path]):
 
