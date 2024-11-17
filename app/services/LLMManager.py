@@ -9,3 +9,4 @@ class LLMManager:
         messages = prompt.format_messages(**kwargs)
         response = self.llm.invoke(messages)
         return response.content
+    
