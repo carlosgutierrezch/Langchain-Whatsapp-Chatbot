@@ -1,18 +1,28 @@
 from typing import List, Any
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Engine
+from sqlalchemy import text
+
 import json
+
+
+
 class DatabaseManager:
     def __init__(self, db_path: str = "all_data.db"):
         self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{db_path}")
 
     def get_schema(self) -> str:
-        """Retrieve the database schema by querying using SQLAlchemy inspector."""
+        """Retrieve the database schema and format it as a string."""
         try:
             inspector = inspect(self.engine)
-            schema = inspector.get_table_names()  
-            return json.dumps(schema)
+            tables = inspector.get_table_names()
+            schema = []
+            for table in tables:
+                columns = inspector.get_columns(table)
+                column_names = [col['name'] for col in columns]
+                schema.append(f"Table: {table}\nColumns: {', '.join(column_names)}")
+            return "\n\n".join(schema)
         except Exception as e:
             raise Exception(f"Error fetching schema: {str(e)}")
         
@@ -20,39 +30,19 @@ class DatabaseManager:
         """Execute an SQL query on the database and return results."""
         try:
             with self.engine.connect() as connection:
-                result = connection.execute(query)
-                return result
+                result = connection.execute(text(query))
+                return [row for row in result]
         except Exception as e:
             raise Exception(f"Error executing query: {str(e)}")
-
+        
+        
     def get_engine(self) -> Engine:
         """Return the SQLAlchemy engine instance."""
         return self.engine
-    
 
-# class DatabaseManager:
-#     def __init__(self):
-#         self.endpoint_url = os.getenv("DB_ENDPOINT_URL")
-
-#     def get_schema(self, uuid: str) -> str:
-#         """Retrieve the database schema."""
-#         try:
-#             response = requests.get(
-#                 f"{self.endpoint_url}/get-schema/{uuid}"
-#             )
-#             response.raise_for_status()
-#             return response.json()['schema']
-#         except requests.RequestException as e:
-#             raise Exception(f"Error fetching schema: {str(e)}")
-
-#     def execute_query(self, uuid: str, query: str) -> List[Any]:
-#         """Execute SQL query on the remote database and return results."""
-#         try:
-#             response = requests.post(
-#                 f"{self.endpoint_url}/execute-query",
-#                 json={"uuid": uuid, "query": query}
-#             )
-#             response.raise_for_status()
-#             return response.json()['results']
-#         except requests.RequestException as e:
-#             raise Exception(f"Error executing query: {str(e)}")
+if __name__=="__main__":
+    try:
+        db_manager= DatabaseManager()
+        print(db_manager.get_schema())
+    except Exception as e:
+        print(e)
