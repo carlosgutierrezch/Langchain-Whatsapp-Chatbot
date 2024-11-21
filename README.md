@@ -197,3 +197,4 @@ When dealing with WhatsApp Business API and wanting to experiment without affect
 4. Use a Different Device
 5. Temporary Number Services
 6. Dedicated Devices for Development
+  
