@@ -2,27 +2,21 @@ from typing import List, Any
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy import text
-
-import json
-
+from langchain_community.utilities import SQLDatabase
 
 
 class DatabaseManager:
-    def __init__(self, db_path: str = "all_data.db"):
+    
+    def __init__(self,db_path: str = "/Users/main/Desktop/chatbot/app/services/all_data.db"):
         self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{db_path}")
 
     def get_schema(self) -> str:
         """Retrieve the database schema and format it as a string."""
         try:
-            inspector = inspect(self.engine)
-            tables = inspector.get_table_names()
-            schema = []
-            for table in tables:
-                columns = inspector.get_columns(table)
-                column_names = [col['name'] for col in columns]
-                schema.append(f"Table: {table}\nColumns: {', '.join(column_names)}")
-            return "\n\n".join(schema)
+            db= SQLDatabase(engine=self.engine)
+            tables = db.get_usable_table_names()
+            return tables
         except Exception as e:
             raise Exception(f"Error fetching schema: {str(e)}")
         
@@ -34,15 +28,6 @@ class DatabaseManager:
                 return [row for row in result]
         except Exception as e:
             raise Exception(f"Error executing query: {str(e)}")
-        
-        
-    def get_engine(self) -> Engine:
-        """Return the SQLAlchemy engine instance."""
-        return self.engine
 
-if __name__=="__main__":
-    try:
-        db_manager= DatabaseManager()
-        print(db_manager.get_schema())
-    except Exception as e:
-        print(e)
+db_manager= DatabaseManager()
+print(db_manager.get_schema())

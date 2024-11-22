@@ -1,6 +1,6 @@
 
-from app.services.SQLAgent import SQLAgent
-from app.services.State import InputState, OutputState
+from SQLAgent import SQLAgent
+from State import InputState, OutputState
 from langgraph.graph import END, START, StateGraph
 import logging
 import sys
