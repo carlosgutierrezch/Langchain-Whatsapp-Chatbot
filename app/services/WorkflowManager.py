@@ -1,6 +1,11 @@
 
+<<<<<<< HEAD
 from SQLAgent import SQLAgent
 from State import InputState, OutputState
+=======
+from app.services.SQLAgent import SQLAgent
+from app.services.State import InputState, OutputState
+>>>>>>> 69a94044205ec7ebdabb3d49af6431e7c830a426
 from langgraph.graph import END, START, StateGraph
 import logging
 import sys

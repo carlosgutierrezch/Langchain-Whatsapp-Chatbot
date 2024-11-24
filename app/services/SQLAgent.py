@@ -1,7 +1,12 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+<<<<<<< HEAD
 from DatabaseManager import DatabaseManager
 from LLMManager import LLMManager
+=======
+from app.services.DatabaseManager import DatabaseManager
+from app.services.LLMManager import LLMManager
+>>>>>>> 69a94044205ec7ebdabb3d49af6431e7c830a426
 
 
 class SQLAgent:
@@ -272,6 +277,7 @@ class SQLAgent:
         reason = lines[1].split(': ')[1]
 
         return {"recommendation": recommendation, "recommendation_reason": reason}
+<<<<<<< HEAD
 
 
 
@@ -553,3 +559,5 @@ class SQLAgent:
 #         reason = lines[1].split(': ')[1]
 
 #         return {"recommendation": recommendation, "recommendation_reason": reason}
+=======
+>>>>>>> 69a94044205ec7ebdabb3d49af6431e7c830a426
